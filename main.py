@@ -6,7 +6,7 @@
 from typing import Annotated, Union
 
 from fastapi import Depends, FastAPI, HTTPException, Query
-from sqlmodel import Field, Session, SQLModel, create_engine, select
+from sqlmodel import Field, Session, SQLModel, create_engine, func, select
 from pydantic import BaseModel
 from datetime import datetime
 from sqlmodel import Relationship
@@ -26,10 +26,10 @@ class User(SQLModel, table=True):
 
 class Transaction(SQLModel, table=True):
     id: int | None = Field(default=None, primary_key=True)
-    user_id: int = Field(foreign_key="User.id")
+    user_id: int = Field(default=None, foreign_key="User.id")
     # Transaction type: one of 'CREDIT', 'DEBIT', 'TRANSFER_IN', 'TRANSFER_OUT'
     transaction_type: str
-    recipient_user_id: int = Field(foreign_key="User.id")
+    recipient_user_id: int = Field(default=None, foreign_key="User.id")
     amount: float
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -123,6 +123,7 @@ def update_user(user_id: int, user: UserUpdate, session: SessionDep):
     return db_user
 
 
+# WALLET ENDPOINTS
 # GET /wallet/{user_id}/balance
 @app.get("/wallet/{user_id}/balance")
 def get_wallet_balance(user_id: int, session: SessionDep):
@@ -132,16 +133,65 @@ def get_wallet_balance(user_id: int, session: SessionDep):
     return {"user_id": user.id,"balance": user.balance,"last_updated": user.updated_at}
 
 
-# POST /wallet/{user_id}/add-money
+
 @app.post("/wallet/{user_id}/add-money")
 def add_money_to_wallet(user_id: int, amount: float,description: str, session: SessionDep):
     user = session.exec(select(User).where(User.id == user_id)).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    user.balance += amount
+    user.balance += amount 
     session.add(user)
     session.commit()
     session.refresh(user)
     return {
   "user_id": user.id, "amount": amount, "new_balance": user.balance, "transaction_type": "CREDIT"
 }
+
+
+@app.post("/wallet/{user_id}/withdraw")
+def withdraw_money_from_wallet(user_id: int, amount: float, description: str, session: SessionDep):
+    user = session.exec(select(User).where(User.id == user_id)).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.balance < amount:
+        raise HTTPException(status_code=400, detail="Insufficient funds")
+    user.balance -= amount
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return {
+        "user_id": user.id,
+        "amount": amount,
+        "new_balance": user.balance,
+        "transaction_type": "DEBIT"
+    }
+
+
+# # GET /transactions/{user_id}?page=1&limit=10
+# @app.get("/transactions/{user_id}")
+# def get_user_transactions(user_id: int, transaction: Transaction, session: SessionDep, limit: Annotated[int, Query(le=100)] = 100):
+#     user = session.exec(select(User).where(User.id == user_id)).first()
+#     if not user:
+#         raise HTTPException(status_code=404, detail="User not found")
+#     transactions = session.exec(
+#         select(Transaction).where(Transaction.user_id == user_id)
+#         .offset(offset).limit(limit)).all()
+    
+#     total_transactions = session.exec(
+#         select(func.count()).where(Transaction.user_id == user_id)
+#     ).scalar()
+
+#     return {
+#         "transactions": [
+#             {
+#                 "transaction_id": transaction.id,
+#                 "transaction_type": transaction.transaction_type,
+#                 "amount": transaction.amount,
+#                 "description": transaction.description,
+#                 "created_at": transaction.created_at
+#             }
+#   ],
+#   "total": total_transactions,
+#   "page": page,
+#   "limit": limit
+# }
